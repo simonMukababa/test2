@@ -1,0 +1,140 @@
+steps:
+- name: 'busybox:musl'
+  args: ['echo', '${_NAME}-setup']
+- name: 'gcr.io/${PROJECT_ID}/cloud-builders/cloud-sdk-ruby'
+  args: ['/app/update-trigger.rb', '${_ENV}', 'true']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  dir: 'ops/cloudbuild/pipelines'
+  entrypoint: 'bash'
+  args: ['-eEuo', 'pipefail', '-c', '
+    echo ========== setting pub sub topics/subscriptions ==========;
+
+    while read name; 
+    do
+      echo ========== setting $name ==========;
+
+      export fullname="${_ENV}--${_BU}--${name}";
+      export topic="projects/${PROJECT_ID}/topics/${fullname}";
+      export subscription="projects/${PROJECT_ID}/subscriptions/${fullname}";
+      echo $topic;
+      echo $subscription;
+
+      exist=$(gcloud pubsub topics list --format="get(name)" --filter="name <= ${topic} AND name >= ${topic}" | wc -l);
+      echo $exist;
+      if [[ $exist -eq 0 ]]; 
+      then 
+        gcloud pubsub topics create ${topic};
+      fi
+
+      exist=$(gcloud pubsub subscriptions list --format="get(name)" --filter="name <= ${subscription} AND name >= ${subscription}" | wc -l);
+      echo $exist;
+      if [[ $exist -eq 0 ]]; 
+      then 
+        gcloud pubsub subscriptions create ${subscription} --topic ${topic};
+      fi
+
+      echo =========================================;
+
+    done < topics.list
+  ']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: 'bash'
+  args: ['-eEuo', 'pipefail', '-c', '
+
+    echo ========== installing prerequisites ==========;
+
+    apt install -y wget;
+    wget https://github.com/mikefarah/yq/releases/download/v4.2.0/yq_linux_amd64.tar.gz -O - | tar xz && mv yq_linux_amd64 /usr/bin/yq;
+    runtime=$(yq e .runtime "${_DIR}"/config.yaml);
+    loadbalancer=$(yq e .loadbalancer "${_DIR}"/config.yaml);
+    echo "runtime=${runtime}";
+    echo "loadbalancer=${loadbalancer}";
+    
+    gcloud config set compute/region "${_REGION}";
+    gcloud config set functions/region "${_REGION}";
+
+    echo ========== Backend Service ==========;
+    if [ "${_DESTROY}" != "true" ]; 
+    then
+      echo ========== Creating Backend ==========;
+
+      exist=$(gcloud functions list --format="get(name)" --filter="name <= ${_NAME} AND name >= ${_NAME}" | wc -l);
+      echo $exist;
+      if [[ $exist -eq 0 ]]; 
+      then 
+        gcloud functions deploy ${_NAME} --gen2 --runtime=${runtime} --entry-point=app --trigger-http --ingress-settings=internal-and-gclb --source=${_DIR} -q;
+        gcloud functions add-invoker-policy-binding ${_NAME} --member=allUsers;
+      fi
+
+      if [ "$loadbalancer" = "true" ]; 
+      then 
+
+        exist=$(gcloud compute network-endpoint-groups list --format="get(name)" --filter="name : ${_NAME}" | wc -l);
+        echo $exist;
+        if [[ $exist -eq 0 ]]; 
+        then 
+          gcloud compute network-endpoint-groups create ${_NAME} --network-endpoint-type=serverless --cloud-run-service=${_NAME} -q;
+        fi
+
+        exist=$(gcloud compute backend-services list --global --format="get(name)" --filter="name : ${_NAME}" | wc -l);
+        echo $exist;
+        if [[ $exist -eq 0 ]]; 
+        then 
+          gcloud compute backend-services create ${_NAME} ${_ENABLE_LOGGING} --load-balancing-scheme=EXTERNAL --global -q;
+          gcloud compute backend-services add-backend ${_NAME} --network-endpoint-group=${_NAME} --network-endpoint-group-region=${_REGION} --global -q;
+        fi
+
+      fi
+
+      echo ======================= Created Backend =====================;
+
+    else
+
+      echo ========== Destroying Backend ==========;
+
+      if [ "$loadbalancer" = "true" ]; 
+      then 
+
+        exist=$(gcloud compute backend-services list --global --format="get(name)" --filter="name : ${_NAME}" | wc -l);
+        echo $exist;
+        if [[ $exist -eq 1 ]]; 
+        then 
+          gcloud compute backend-services delete ${_NAME} --global -q;
+        fi
+
+        exist=$(gcloud compute network-endpoint-groups list --format="get(name)" --filter="name : ${_NAME}" | wc -l);
+        echo $exist;
+        if [[ $exist -eq 1 ]]; 
+        then 
+          gcloud compute network-endpoint-groups delete ${_NAME} -q;
+        fi
+
+      fi
+
+      exist=$(gcloud functions list --format="get(name)" --filter="name : ${_NAME}" | wc -l);
+      echo $exist;
+      if [[ $exist -eq 1 ]]; 
+      then 
+        gcloud functions delete ${_NAME} --gen2 -q;
+      fi
+
+      echo ===========Destroyed Backend  ============================;
+
+    fi
+    ']
+- name: 'gcr.io/${PROJECT_ID}/${_UPTIME_BUILDER}'
+  args: ['/app/uptime-check.rb', "$PROJECT_ID", "${_NAME}", "${_URL}", "${_PATH}/info.json"]
+  waitFor: ['-']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  args: ['true']
+  waitFor: ['-']
+substitutions:
+  _TAG_RIGHT: "${TAG_NAME#*----}"
+  _DIR: "${_TAG_RIGHT%%----*}"
+  #_HOST: "${PROJECT_ID//svc/hst}"
+  _NAME: "${_ENV}--${_SVC}--${_DIR}"
+options:
+  machineType: 'E2_HIGHCPU_8'
+  dynamic_substitutions: true
+  substitution_option: 'ALLOW_LOOSE'
+timeout: 900s

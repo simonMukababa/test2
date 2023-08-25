@@ -1,0 +1,4 @@
+steps:
+- name: 'gcr.io/sok-dev-svc/cloud-builders/gcloud-ruby:dev'
+  args: ['/app/update-trigger.rb', '${_ENV}', 'true']
+timeout: 900s

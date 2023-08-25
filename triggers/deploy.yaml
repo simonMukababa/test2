@@ -1,0 +1,17 @@
+filename: ops/cloudbuild/pipelines/<typ>.yaml
+name: <env>--<svc>
+substitutions:
+  _BU: <bu>
+  _SVC: <svc>
+  _DESC: <desc>  
+  _ENV: <env>
+  _REGION: <region>
+  _URL: https://<env>.<et>.<url>
+  _VALIDATOR_BUILDER: cloud-builders/null
+  envs:
+    prd:
+      _URL: https://<url>
+triggerTemplate:
+  projectId: sok-<cenv>-svc
+  repoName: bitbucket_wasoko_<repo>
+  tagName: ^<env>---*

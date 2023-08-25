@@ -1,0 +1,39 @@
+steps:
+
+- name: 'busybox:musl'
+  args: ['echo', '${_NAME}']
+- name: 'gcr.io/${PROJECT_ID}/cloud-builders/ruby-slim'
+  args: ["/app/info.rb", "BUILD_ID=$BUILD_ID;SHORT_SHA=$SHORT_SHA;PROJECT_ID=$PROJECT_ID;LOCATION=$LOCATION;TRIGGER_NAME=$TRIGGER_NAME;COMMIT_SHA=$COMMIT_SHA;REVISION_ID=$REVISION_ID;SHORT_SHA=$SHORT_SHA;REPO_NAME=$REPO_NAME;BRANCH_NAME=$BRANCH_NAME;TAG_NAME=$TAG_NAME;TRIGGER_BUILD_CONFIG_PATH=$TRIGGER_BUILD_CONFIG_PATH;BU=${_BU};ET=${_ET};ENV=${_ENV};SVC=${_SVC};DESC=${_DESC};COMMIT_URL=${_COMMIT_URL};REPO_URL=${_REPO_URL}"]
+- name: 'busybox:musl'
+  args: ['cat', 'tmp/src.json']
+- name: 'busybox:musl'
+  args: ['cp', 'tmp/src.json', '${_DIR}/public/info.json']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: bash
+  args: ['-c', 'gcloud beta functions deploy ${_NAME} --gen2 --trigger-http --runtime=go120 --entry-point=app --allow-unauthenticated --serve-all-traffic-latest-revision 
+    --run-service-account=${_SA} --service-account=${_SA} --update-env-vars=USERNAME=cloudbuild --update-secrets=PASSWORD=INFRA_FUNC_PASSWORD:latest 
+    --region=${_REGION} --source ${_DIR} --ingress-settings=internal-and-gclb']
+  timeout: 600s
+- name: 'gcr.io/${PROJECT_ID}/cloud-builders/ruby-slim'
+  args: ['/app/curl.rb', '${_URL}${_PATH}/info.json', '10']
+- name: 'busybox:musl'
+  args: ['cat', 'tmp/src.json']
+- name: 'busybox:musl'
+  args: ['cat', 'tmp/dst.json']
+- name: 'gcr.io/${PROJECT_ID}/cloud-builders/ruby-slim'
+  args: ['/app/verify.rb', '${_URL}${_PATH}/info.json']
+- name: 'busybox:musl'
+  args: ['cat', 'tmp/pass']
+  substitutions:
+  _TAG_RIGHT: "${TAG_NAME#*----}"
+  _DIR: "${_TAG_RIGHT%%----*}"
+  _NAME: "${_ENV}--${_SVC}--${_DIR}"
+  _PFIX: "${_TAG_RIGHT#*----}"
+  _TAG: '${_ENV}---${_PFIX}'
+  _SA: 'infra-func@${PROJECT_ID}.iam.gserviceaccount.com'
+  _PATH: '/${_DIR}'
+  options:
+  dynamic_substitutions: true
+  substitution_option: 'ALLOW_LOOSE'
+  machineType: 'E2_HIGHCPU_8'  
+  timeout: 900s

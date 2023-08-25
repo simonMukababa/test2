@@ -1,0 +1,6 @@
+bu: infra
+repo: infra-func
+svc: infra-func
+desc: infra-functions-for-infra-api
+region: europe-west2
+url: infra.wasoko.com
